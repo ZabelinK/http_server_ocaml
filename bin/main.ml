@@ -1,26 +1,24 @@
 open Core
 open Lwt.Infix
 
-type config = {directory: string; port: int}
+type config = { directory : string; port : int }
+
+type http_response = {
+  version : string;
+  return_code : int;
+  return_message : string;
+  headers : (string * string) list;
+  data : string;
+}
 
 let parse_http_request message =
   let lexbuf = Lexing.from_string message in
-  try
-    let _result = Http_parser.main Http_lexer.read_token lexbuf in
-    Logs.debug (fun m -> m "Method: %s" _result.method_) ;
-    Logs.debug (fun m -> m "Path: %s" _result.path) ;
-    Logs.debug (fun m -> m "Version: %s" _result.version) ;
-    List.iter _result.headers ~f:(fun (key, value) ->
-        Logs.debug (fun m -> m "Header: %s %s" key value) ) ;
-    Ok ()
-  with
-  | Stdlib.Parsing.Parse_error ->
-      let pos = Lexing.lexeme_start lexbuf in
-      let token = Lexing.lexeme lexbuf in
-      Error
-        (Printf.sprintf "Parsing Error at position %d: unexpected token '%s'"
-           pos token )
-  | Failure msg -> Error ("Failed : " ^ msg)
+  Http_parser.main Http_lexer.read_token lexbuf
+
+(*with | Stdlib.Parsing.Parse_error -> let pos = Lexing.lexeme_start lexbuf in
+  let token = Lexing.lexeme lexbuf in Error (Printf.sprintf "Parsing Error at
+  position %d: unexpected token '%s'" pos token ) | Failure msg -> Error
+  ("Failed : " ^ msg)*)
 
 let string_of_sockaddr (addr : Caml_unix.sockaddr) : string =
   match addr with
@@ -28,20 +26,74 @@ let string_of_sockaddr (addr : Caml_unix.sockaddr) : string =
       Printf.sprintf "%s:%d" (Caml_unix.string_of_inet_addr inet_addr) port
   | Caml_unix.ADDR_UNIX path -> Printf.sprintf "Unix socket: %s" path
 
-let handle_client _ (addr : Caml_unix.sockaddr)
-    ((ic : Lwt_io.input_channel), (_ : Lwt_io.output_channel)) =
-  Logs.info (fun m -> m "New client from - %s" (string_of_sockaddr addr)) ;
-  Lwt_io.read ic
-  >>= fun message ->
-  match parse_http_request message with
-  | Ok () ->
-      Logs_lwt.info (fun m -> m "Done Parsing") >>= fun () -> Lwt.return_unit
-  | Error err ->
-      Logs.err (fun m -> m "Error while parsing: %s" err) ;
-      Lwt.return_unit
+let handle_http_request (config : config) (request : Ast.http_request_header) =
+  match request.method_ with
+  | "GET" ->
+      Lwt.catch
+        (fun () ->
+          Lwt_io.with_file ~mode:Lwt_io.Input (config.directory ^ request.path)
+            (fun ic -> Lwt_io.read ic)
+          >>= fun page ->
+          Lwt.return
+            {
+              version = request.version;
+              return_code = 200;
+              return_message = "OK";
+              headers = [ ("Content-Type", "text/html") ];
+              data = page;
+            })
+        (fun _ ->
+          Lwt.return
+            {
+              version = request.version;
+              return_code = 404;
+              return_message = "Not Found";
+              headers =
+                [ ("Content-Type", "text/html"); ("Connection", "keep-alive") ];
+              data = "<html><body>Not Found</body></html>";
+            })
+  | _ ->
+      Lwt.return
+        {
+          version = request.version;
+          return_code = 405;
+          return_message = "Method Not Allowed";
+          headers = [ ("Allow", "GET"); ("Content-type", "text/plain") ];
+          data = "";
+        }
+(* prepare response in async manner*)
+
+let http_response_to_string http_response =
+  let status_line =
+    Printf.sprintf "%s %d %s\r\n" http_response.version
+      http_response.return_code http_response.return_message
+  in
+  let headers_lines =
+    List.map http_response.headers ~f:(fun (key, value) ->
+        Printf.sprintf "%s: %s\r\n" key value)
+    |> String.concat
+  in
+  Printf.sprintf "%s%s\r\n%s" status_line headers_lines http_response.data
+
+let handle_client config (addr : Caml_unix.sockaddr)
+    ((ic : Lwt_io.input_channel), (oc : Lwt_io.output_channel)) =
+  Logs.info (fun m -> m "New client from - %s" (string_of_sockaddr addr));
+  Lwt.catch
+    (fun () ->
+      Lwt_io.read ic >>= fun message ->
+      print_endline message;
+      let http_request_header = parse_http_request message in
+      Logs_lwt.info (fun m -> m "Got request %s" http_request_header.method_)
+      >>= fun () ->
+      handle_http_request config http_request_header >>= fun response ->
+      Lwt_io.write oc (http_response_to_string response) >>= fun () ->
+      Logs_lwt.info (fun m ->
+          m "Sent response \n%s" (http_response_to_string response)))
+    (fun exp ->
+      Logs_lwt.err (fun m -> m "Failed to read message %s" (Exn.to_string exp)))
 
 let start (c : config) =
-  Logs.debug (fun m -> m "Directory to work with : %s" c.directory) ;
+  Logs.debug (fun m -> m "Directory to work with : %s" c.directory);
   let handle_client_with_config = handle_client c in
   Lwt_io.establish_server_with_client_address
     (Lwt_unix.ADDR_INET (Caml_unix.inet_addr_any, c.port))
@@ -55,10 +107,10 @@ let command =
     (let%map_open.Command directory = anon ("directory" %: string)
      and port = anon (maybe ("port" %: int)) in
      fun () ->
-       let config = {directory; port= Option.value port ~default:8080} in
-       start_http_server config )
+       let config = { directory; port = Option.value port ~default:8080 } in
+       start_http_server config)
 
 let () =
-  Logs.set_reporter (Logs_fmt.reporter ()) ;
-  Logs.set_level (Some Logs.Debug) ;
+  Logs.set_reporter (Logs_fmt.reporter ());
+  Logs.set_level (Some Logs.Debug);
   Command_unix.run ~version:"0.1" ~build_info:"DEBUG" command

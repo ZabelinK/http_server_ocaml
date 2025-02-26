@@ -1,9 +1,25 @@
-profile = ocamlformat
+# Use one of the recommended profiles. 
+# Options include `conventional`, `janestreet`, `compact`, or `sparse`.
+# `conventional` is a good default that stays close to standard OCaml conventions.
+profile = conventional
+
+# Decide how to break `match`/`try` cases.
 break-cases = fit
-margin = 77
+
+# Maximum line width before wrapping. 80 is a common choice; adjust to your preference.
+margin = 80
+
+# Wrap comments and docstrings to the margin.
 wrap-comments = true
+
+# Use LF for line endings (helpful if you’re on Windows or want consistency).
 line-endings = lf
 
-# To make ocaml-ci happy
-version = ignore
-version-check = false
+# Typically you’d set this to a specific version so that everyone on your team 
+# uses the same ocamlformat version. Here we pick a placeholder "0.24".
+version = 0.27.0
+version-check = true
+
+# If your CI system requires ignoring version mismatches, you can set:
+# version-check = false
+# but it’s generally recommended to keep it true to ensure consistent formatting.
