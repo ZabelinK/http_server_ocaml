@@ -1,0 +1,28 @@
+(rule
+ (targets http_lexer.ml)
+ (deps http_lexer.mll)
+ (action
+  (run ocamllex %{deps})))
+
+(rule
+ (targets http_parser.ml http_parser.mli)
+ (deps http_parser.mly)
+ (action
+  (run ocamlyacc %{deps})))
+
+(executable
+ (public_name http_server)
+ (name main)
+ (preprocess
+  (pps ppx_let))
+ (modules main http_lexer http_parser)
+ (libraries
+  ast
+  core
+  core_unix
+  core_unix.command_unix
+  lwt
+  lwt.unix
+  logs
+  logs.fmt
+  logs.lwt))

@@ -1,0 +1,4 @@
+(library
+ (name ast) ;; The library's internal name
+ (modules ast) ;; We only have ast.ml/mli in this directory
+ )
